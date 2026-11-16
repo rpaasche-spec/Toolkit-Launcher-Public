@@ -3,79 +3,85 @@
 
 <#
 .SYNOPSIS
-    Finds and removes temporary PowerShell-Toolkit downloads.
+    Removes the temporary PowerShell-Toolkit.
+
+.DESCRIPTION
+    Removes %TEMP%\Toolkit and its paths from
+    the current PowerShell session.
 #>
 
-# Find our temporary Toolkit folders
-$ToolkitFolders = @(
-    Get-ChildItem -LiteralPath $env:TEMP -Directory |
-        Where-Object {
-            $_.Name -match '^PowerShell-Toolkit-[0-9a-f]{32}$'
-        }
-)
+$ErrorActionPreference = 'Stop'
 
-if ($ToolkitFolders.Count -eq 0) {
-    Write-Host 'No temporary Toolkit folders found.'
+$ToolkitRoot = Join-Path $env:TEMP 'Toolkit'
+$Marker = Join-Path $ToolkitRoot '.toolkit-launcher-managed'
+
+# Check if Toolkit exists
+if (-not (Test-Path -LiteralPath $ToolkitRoot)) {
+    Write-Host 'No temporary Toolkit installation found.'
     return
 }
 
-Write-Host "`nFound Toolkit folders:" -ForegroundColor Cyan
+# Safety checks
+$Item = Get-Item -LiteralPath $ToolkitRoot -Force
 
-$ToolkitFolders | Select-Object FullName
+if (-not $Item.PSIsContainer -or
+    ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Unsafe Toolkit folder. Cleanup cancelled.'
+}
 
-# Ask before deleting
-$Confirm = Read-Host "`nDelete these folders? Type JA"
+if (-not (Test-Path -LiteralPath $Marker)) {
+    throw 'Toolkit folder is not managed by launcher.'
+}
+
+$Initializer = Join-Path $ToolkitRoot 'Initialize-Toolkit.ps1'
+
+if (-not (Test-Path -LiteralPath $Initializer)) {
+    throw 'Toolkit installation could not be verified.'
+}
+
+Write-Host "`nToolkit location: $ToolkitRoot" -ForegroundColor Cyan
+
+$Confirm = Read-Host 'Remove PowerShell-Toolkit? Type JA'
 
 if ($Confirm -cne 'JA') {
     Write-Host 'Cleanup cancelled.'
     return
 }
 
-foreach ($Folder in $ToolkitFolders) {
+# Remove downloaded files
+Remove-Item -LiteralPath $ToolkitRoot `
+    -Recurse -Force -ErrorAction Stop
 
-    # Verify that this is a Toolkit download
-    $Init = Get-ChildItem -LiteralPath $Folder.FullName `
-        -Filter 'Initialize-Toolkit.ps1' `
-        -File -Recurse -ErrorAction SilentlyContinue |
-        Select-Object -First 1
+# Remove paths from current PowerShell session
+$Separator = [IO.Path]::PathSeparator
+$Pattern = [regex]::Escape([string]$Separator)
 
-    if (-not $Init) {
-        Write-Warning "Skipping unverified folder: $($Folder.FullName)"
-        continue
-    }
+foreach ($VariableName in @('PATH', 'PSModulePath')) {
 
-    # Remove Toolkit paths from current session
-    foreach ($VariableName in @('PATH', 'PSModulePath')) {
+    $CurrentValue = [Environment]::GetEnvironmentVariable(
+        $VariableName,
+        'Process'
+    )
 
-        $CurrentValue = [Environment]::GetEnvironmentVariable(
-            $VariableName, 'Process'
-        )
+    $Remaining = @(
+        ($CurrentValue -split $Pattern) |
+            Where-Object {
+                $_ -and
+                -not $_.StartsWith(
+                    "$ToolkitRoot\",
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            }
+    )
 
-        $Paths = $CurrentValue -split [regex]::Escape(
-            [string][IO.Path]::PathSeparator
-        )
-
-        $Paths = $Paths | Where-Object {
-            -not $_.StartsWith(
-                "$($Folder.FullName)\",
-                [StringComparison]::OrdinalIgnoreCase
-            )
-        }
-
-        [Environment]::SetEnvironmentVariable(
-            $VariableName,
-            ($Paths -join [IO.Path]::PathSeparator),
-            'Process'
-        )
-    }
-
-    Remove-Item -LiteralPath $Folder.FullName `
-        -Recurse -Force -ErrorAction Stop
-
-    Write-Host "Removed: $($Folder.Name)" -ForegroundColor Green
+    [Environment]::SetEnvironmentVariable(
+        $VariableName,
+        ($Remaining -join $Separator),
+        'Process'
+    )
 }
 
 Remove-Variable ToolkitSessionRoot -Scope Global `
     -ErrorAction SilentlyContinue
 
-Write-Host "`nCleanup completed." -ForegroundColor Green
+Write-Host "`nPowerShell-Toolkit removed." -ForegroundColor Green
