@@ -231,6 +231,20 @@ try {
 
     $global:ToolkitSessionRoot = $ToolkitRoot
 
+# Register Toolkit cleanup command in current session
+$StopScript = Join-Path $PSScriptRoot 'Stop-Toolkit.ps1'
+
+if (Test-Path -LiteralPath $StopScript) {
+
+    $StopScriptContent = Get-Content -LiteralPath $StopScript -Raw
+
+    Set-Item -Path Function:\global:Stop-Toolkit `
+        -Value ([scriptblock]::Create($StopScriptContent))
+}
+else {
+    Write-Warning 'Stop-Toolkit.ps1 was not found.'
+}
+
     Write-Host "`nPowerShell-Toolkit is ready!" -ForegroundColor Green
     Write-Host "Location: $ToolkitRoot"
 }
